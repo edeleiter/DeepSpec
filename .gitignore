@@ -9,3 +9,12 @@ logs/
 build/
 dist/
 .DS_Store
+.env
+.venv/
+# Generated artifacts (kept out of git; the target cache/checkpoints live in
+# Docker named volumes, but guard the in-repo paths too). Mirrors .dockerignore.
+cache/
+checkpoints/
+tensorboard/
+eval_datasets/perfectblend.jsonl
+.claude/

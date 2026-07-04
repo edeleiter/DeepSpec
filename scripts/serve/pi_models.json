@@ -1,0 +1,25 @@
+{
+  "providers": {
+    "dspark-local": {
+      "name": "DSpark Qwen3-4B (local)",
+      "baseUrl": "http://localhost:8000/v1",
+      "apiKey": "local",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "dspark-qwen3-4b",
+          "name": "DSpark Qwen3-4B",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 40960,
+          "maxTokens": 4096,
+          "compat": {
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false,
+            "maxTokensField": "max_tokens"
+          }
+        }
+      ]
+    }
+  }
+}
