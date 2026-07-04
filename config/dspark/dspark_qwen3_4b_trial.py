@@ -21,10 +21,11 @@ model = dict(
     # (deepspec/eval/base_evaluator.py:100-112). Keep as-is.
     target_layer_ids=[1, 9, 17, 25, 33],
     mask_token_id=151669,
-    # #1 OOM knob: drives the [1, num_anchors, block_size, vocab=151936] training
-    # logits tensor. Stock is 512. Start at 256 on 16 GB; raise toward 512 if no
-    # OOM, drop to 128 if OOM.
-    num_anchors=256,
+    # Drives the [1, num_anchors, block_size, vocab=151936] training logits tensor.
+    # Stock is 512. 128 leaves comfortable headroom on 16 GB (per-step peak ~11 GB
+    # once FSDP is bypassed on single-GPU -- see base_trainer). Can be raised toward
+    # 256/512 as VRAM allows for higher anchor-sampling density.
+    num_anchors=128,
 
     ## markov head
     markov_rank=256,

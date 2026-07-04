@@ -3,7 +3,13 @@ import copy
 from deepspec.modeling.dspark.common import validate_target_layer_ids
 
 
-TRAIN_ATTN_IMPLEMENTATION = "flex_attention"
+# NOTE: flex_attention is fast ONLY under torch.compile, and its compiled kernel
+# blows past shared memory at head_dim=256 on consumer Blackwell (sm_120) -- so on
+# a 5070 Ti it can only run EAGER, whose backward is pathologically slow
+# (~45s/micro-batch, backward-dominated). sdpa gives a fused fast backward with no
+# compile, uses the dense-bias path (modeling.py:424-434), and is already what eval
+# uses at this head_dim on this GPU (eval/dspark/evaluator.py:34).
+TRAIN_ATTN_IMPLEMENTATION = "sdpa"
 
 
 def build_draft_config(

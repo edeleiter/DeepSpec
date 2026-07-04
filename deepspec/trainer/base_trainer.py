@@ -178,7 +178,14 @@ class BaseTrainer:
         if self.args.train.torch_compile:
             print_on_local_main("Compiling training model with torch.compile...")
             self.model = torch.compile(self.model, dynamic=True)
-        self.model = self._wrap_with_fsdp(self.model)
+        # FSDP flattens every parameter into one buffer and re-cats a full-size
+        # gradient view each step (~5.6 GB of transient on this draft). On a single
+        # GPU (world_size==1) it shards nothing, so it is pure memory overhead --
+        # skip it and train the module directly. The draft is already bf16
+        # (build_models .to(precision_dtype)) and BF16Optimizer holds the fp32
+        # master, so mixed precision is preserved without FSDP's MixedPrecision.
+        if self.world_size > 1:
+            self.model = self._wrap_with_fsdp(self.model)
 
         self.train_dataset = CacheDataset(cache_dir=self.args.data.target_cache_path)
         validate_train_cache(
@@ -367,7 +374,12 @@ class BaseTrainer:
                 should_sync = (
                     (self.next_micro_step + 1) % self.gradient_accumulation_steps == 0
                 )
-                sync_context = nullcontext() if should_sync else self.model.no_sync()
+                # no_sync only exists under FSDP/DDP; on a single GPU grad
+                # accumulation needs no cross-rank sync suppression.
+                if should_sync or not isinstance(self.model, FSDP):
+                    sync_context = nullcontext()
+                else:
+                    sync_context = self.model.no_sync()
                 with sync_context:
                     loss = self.run_batch(batch) / self.gradient_accumulation_steps
                     loss.backward()
@@ -376,10 +388,16 @@ class BaseTrainer:
                 if not should_sync:
                     continue
 
-                grad_norm = FSDP.clip_grad_norm_(
-                    self.model,
-                    float(self.args.train.max_grad_norm),
-                )
+                if isinstance(self.model, FSDP):
+                    grad_norm = FSDP.clip_grad_norm_(
+                        self.model,
+                        float(self.args.train.max_grad_norm),
+                    )
+                else:
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        float(self.args.train.max_grad_norm),
+                    )
                 self.optimizer.step()
                 training_logger.on_optimizer_step(
                     global_step=self.global_step,

@@ -20,8 +20,17 @@ PIPELINE="${PIPELINE:-scripts/qwen3_4b/run_pipeline.sh}"
 # Big artifacts persist in Docker named volumes, NOT the Windows bind mount: HF
 # downloads, target caches, and checkpoints (checkpoints use symlinks that don't
 # survive a Windows bind mount). Matches the volumes used for the Ornith runs.
-run_args=(
-    --gpus all --rm -it
+run_args=(--gpus all)
+# DETACH=1 -> fire-and-forget: runs in the background, survives your shell/session
+# closing, and keeps the container after exit so `docker logs` still works. Follow
+# with `docker logs -f <CONTAINER_NAME>`; remove with `docker rm <CONTAINER_NAME>`.
+# Default -> interactive (--rm -it), tied to this terminal.
+if [[ "${DETACH:-0}" == "1" ]]; then
+    run_args+=(-d --name "${CONTAINER_NAME:-deepspec-run}")
+else
+    run_args+=(--rm -it)
+fi
+run_args+=(
     --shm-size="${SHM_SIZE:-8g}"    # <8g -> DataLoader dies with a /dev/shm bus error
     -v "$(pwd -W)":/workspace -w /workspace
     -v deepspec-hf:/root/.cache/huggingface

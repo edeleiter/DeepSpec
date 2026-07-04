@@ -43,52 +43,43 @@ only a change to `requirements.txt` does.
 
 ```bash
 cd /f/DeepSpec
-MSYS_NO_PATHCONV=1 docker build -t deepspec-ornith:latest .
+MSYS_NO_PATHCONV=1 docker build -t deepspec:latest .
 ```
 
 ## Run the pipeline
 
-`MSYS_NO_PATHCONV=1` stops Git Bash from rewriting container paths; `$(pwd -W)`
-emits a Windows path Docker mounts cleanly. The three **named volumes** persist
-across `--rm` runs: the ~19GB HF download, the target cache, and — importantly —
-checkpoints (the trainer's `step_latest` symlink needs a real Linux fs, so
-checkpoints must NOT live on the Windows bind mount).
+Use the model-agnostic launcher `scripts/docker_run.sh`. It encapsulates the
+Git Bash `docker run` incantation — `MSYS_NO_PATHCONV=1` (stops path rewriting),
+`$(pwd -W)` (a Windows path Docker mounts cleanly), `--gpus all`, `--shm-size=8g`,
+and the three **named volumes** that persist across `--rm` runs: the ~19GB HF
+download, the target cache, and — importantly — checkpoints (the trainer's
+`step_latest` symlink needs a real Linux fs, so checkpoints must NOT live on the
+Windows bind mount). Pick the model with `PIPELINE`; pass the runner's env knobs
+through as `-e KEY=value`:
 
 ```bash
-MSYS_NO_PATHCONV=1 docker run --gpus all --rm -it \
-  --shm-size=8g \
-  --env-file .env \
-  -v "$(pwd -W)":/workspace -w /workspace \
-  -v deepspec-hf:/root/.cache/huggingface \
-  -v deepspec-cache:/root/.cache/deepspec \
-  -v deepspec-ckpt:/root/checkpoints \
-  -e SAMPLE_SIZE=200 -e CUDA_VISIBLE_DEVICES=0 \
-  deepspec-ornith:latest
+PIPELINE=scripts/ornith/run_pipeline.sh bash scripts/docker_run.sh \
+  -e SAMPLE_SIZE=200 -e CUDA_VISIBLE_DEVICES=0
 ```
 
-`--shm-size=8g` is required: the training DataLoader shares large cached
-hidden-state tensors through `/dev/shm`, and Docker's 64MB default makes workers
-die with a bus error. Run a **single stage** with
-`-e STAGE=<preflight|data|cache|train|eval>`, e.g.
-`-e STAGE=cache`. Skip a stage in a full run with `-e RUN_PREFLIGHT=0` (once the
-load gate is trusted, this saves a ~19GB reload). Rebuild the cache with
-`-e FORCE=1`. See the header of `scripts/ornith/run_pipeline.sh` for the full
-env-var surface (`TARGET`, `CONFIG`, `SAMPLE_SIZE`, `CACHE_DIR`, `DRAFT_CKPT`, …).
+`--shm-size=8g` (set by the launcher) is required: the training DataLoader shares
+large cached hidden-state tensors through `/dev/shm`, and Docker's 64MB default
+makes workers die with a bus error. Run a **single stage** with
+`-e STAGE=<preflight|data|cache|train|eval>`, e.g. `-e STAGE=cache`. Skip a stage
+in a full run with `-e RUN_PREFLIGHT=0` (once the load gate is trusted, this saves
+a ~19GB reload). Rebuild the cache with `-e FORCE=1`. See the header of
+`scripts/ornith/run_pipeline.sh` for the full env-var surface (`TARGET`, `CONFIG`,
+`SAMPLE_SIZE`, `CACHE_DIR`, `DRAFT_CKPT`, …).
 
-**Debug / interactive** — override the CMD with `bash`:
+**Debug / interactive** — override the container command with `bash`:
 
 ```bash
-MSYS_NO_PATHCONV=1 docker run --gpus all --rm -it \
-  --shm-size=8g \
-  --env-file .env \
-  -v "$(pwd -W)":/workspace -w /workspace \
-  -v deepspec-hf:/root/.cache/huggingface \
-  -v deepspec-cache:/root/.cache/deepspec \
-  -v deepspec-ckpt:/root/checkpoints \
-  deepspec-ornith:latest bash
+CMD='bash' bash scripts/docker_run.sh
 ```
 
-Troubleshooting (Git Bash / Docker Desktop):
+Troubleshooting (Git Bash / Docker Desktop) — `scripts/docker_run.sh` already
+sets `MSYS_NO_PATHCONV=1` and `$(pwd -W)`; these apply if you invoke `docker run`
+by hand instead:
 - `-w /workspace` becomes a `C:/Program Files/Git/...` path → you forgot
   `MSYS_NO_PATHCONV=1`.
 - "invalid mode" / drive-not-shared → use `$(pwd -W)` (not `$PWD`) and share the

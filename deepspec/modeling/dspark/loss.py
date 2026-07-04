@@ -72,16 +72,18 @@ def _compute_accept_rate_3d(
 
 def _compute_local_l1_term(
     *,
-    outputs: DSparkForwardOutput,
-    aligned_target_logits: Optional[torch.Tensor],
+    accept_rate_3d: Optional[torch.Tensor],
     loss_weight_mask: torch.Tensor,
+    zero: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    zero = outputs.draft_logits.new_zeros((), dtype=torch.float32)
-    if aligned_target_logits is None:
+    if accept_rate_3d is None:
         return zero, zero
-    draft_probs = torch.softmax(outputs.draft_logits.float(), dim=-1)
-    target_probs = torch.softmax(aligned_target_logits.float(), dim=-1)
-    l1_dist_per_token = (draft_probs - target_probs).abs().sum(dim=-1)
+    # The L1 (total-variation) distance between draft/target prob distributions is
+    # exactly 2*(1 - accept_rate), and accept_rate_3d already carries the softmax
+    # grad path. Reusing it (instead of recomputing softmax(draft.float()) and
+    # softmax(target.float())) drops two full-vocab fp32 tensors -- the #1 loss-peak
+    # hog on a 16 GB card -- with identical gradients.
+    l1_dist_per_token = 2.0 * (1.0 - accept_rate_3d)
     l1_loss_num = (l1_dist_per_token * loss_weight_mask).sum()
     l1_loss_den = loss_weight_mask.sum()
     return l1_loss_num, l1_loss_den
@@ -123,9 +125,9 @@ def _collect_local_terms(
     )
     if l1_loss_alpha > 0:
         l1_loss_num, l1_loss_den = _compute_local_l1_term(
-            outputs=outputs,
-            aligned_target_logits=aligned_target_logits,
+            accept_rate_3d=accept_rate_3d,
             loss_weight_mask=loss_weight_mask,
+            zero=zero,
         )
     else:
         l1_loss_num = zero

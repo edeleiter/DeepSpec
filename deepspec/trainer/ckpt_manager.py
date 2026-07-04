@@ -220,7 +220,11 @@ def _serialize_training_state(
 
 
 def _full_model_state_dict(model):
-    assert isinstance(model, FSDP), "training model must be wrapped in FSDP"
+    # Single-GPU training skips the FSDP wrap (it only adds overhead), so the model
+    # is a plain module -- return its state_dict directly. Key normalization in the
+    # caller strips any torch.compile "_orig_mod." prefix.
+    if not isinstance(model, FSDP):
+        return model.state_dict()
     state_dict_config = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
     with FSDP.state_dict_type(
         model,

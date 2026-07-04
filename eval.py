@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 import torch
 from transformers import AutoConfig
 from deepspec.eval.dspark import (
@@ -32,6 +33,31 @@ TASKS = [
     ("arena-hard-v2", 500),
 ]
 
+def resolve_tasks():
+    """Resolve the benchmark suite, optionally narrowed via env for fast runs.
+
+    EVAL_TASKS="gsm8k,humaneval" selects a subset (default: all 9 tasks).
+    EVAL_MAX_SAMPLES caps the per-task sample count (default: each task's own cap).
+    Unset -> the full suite, unchanged.
+    """
+    default_caps = {name: cap for name, cap in TASKS}
+    names_env = os.environ.get("EVAL_TASKS")
+    cap_env = os.environ.get("EVAL_MAX_SAMPLES")
+    wanted = (
+        [n.strip() for n in names_env.split(",") if n.strip()]
+        if names_env
+        else [name for name, _ in TASKS]
+    )
+    tasks = []
+    for name in wanted:
+        if name not in default_caps:
+            raise ValueError(
+                f"Unknown EVAL_TASKS entry {name!r}; valid: {sorted(default_caps)}"
+            )
+        tasks.append((name, int(cap_env) if cap_env else default_caps[name]))
+    return tasks
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--target_name_or_path", type=str, required=True)
@@ -48,7 +74,7 @@ def parse_args():
     parser.add_argument("--step", type=int, default=None,help=("step for tensorboard logging"),)
     parser.add_argument("--seed", type=int, default=980406)
     args = parser.parse_args()
-    args.tasks = list(TASKS)
+    args.tasks = resolve_tasks()
     return args
 
 

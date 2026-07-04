@@ -13,6 +13,10 @@ sentencepiece==0.2.1
 safetensors==0.7.0
 prettytable==3.17.0
 
+# 8-bit Adam (quantized optimizer state) to fit the draft + optimizer on a 16 GB
+# card. Verified to run on sm_120 / cu128. Enabled via DSPARK_ADAM8BIT=1.
+bitsandbytes==0.49.2
+
 # Data preparation dependencies.
 datasets==4.8.5
 openai==2.6.1

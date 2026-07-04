@@ -121,6 +121,13 @@ if [[ "$REGEN" == "1" ]] && should_run regen "${RUN_REGEN_STAGE:-1}"; then
         banner "stage 2: regen -- SKIP (found $TRAIN_REGEN; FORCE=1 to regenerate)"
     else
         banner "stage 2: regenerate answers with $TARGET (SGLang :$SGLANG_PORT)"
+        if ! command -v sglang >/dev/null 2>&1; then
+            echo "ERROR: 'sglang' is not installed in this image, but REGEN=1 needs it." >&2
+            echo "       Either bake it in (pip install 'sglang[all]' -- note it pins its" >&2
+            echo "       own torch/flashinfer, so test against the cu128/sm_120 stack)," >&2
+            echo "       or set REGEN=0 to train on the raw split answers (no SGLang)." >&2
+            exit 1
+        fi
         mkdir -p "$(dirname "$TRAIN_REGEN")" logs
         sglang_log="logs/sglang_qwen3_4b_${SGLANG_PORT}.log"
 

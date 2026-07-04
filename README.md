@@ -38,6 +38,8 @@ bash scripts/train/train.sh
 
 Hardware: the default configs and scripts assume a single node with 8 GPUs. For fewer GPUs, reduce `CUDA_VISIBLE_DEVICES`.
 
+> **Single-GPU end-to-end (train → serve → llama.cpp):** see [DSPARK_QWEN3_4B.md](./DSPARK_QWEN3_4B.md) for a full DSpark Qwen3-4B trial on one consumer GPU (Docker/WSL2), an OpenAI-compatible server for coding agents, and the native llama.cpp port.
+
 
 ## Evaluation
 
