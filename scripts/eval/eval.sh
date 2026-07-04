@@ -2,18 +2,19 @@
 # semantics. eval.py spawns one worker per visible GPU by itself.
 # Here RANK/WORLD_SIZE mean node_rank/node_count, so WORLD_SIZE=1 is a
 # single-node local run; total GPU workers come from CUDA_VISIBLE_DEVICES.
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-export MASTER_ADDR=127.0.0.1
-export MASTER_PORT=29500
-export RANK=0
-export WORLD_SIZE=1
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3}
+export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
+export MASTER_PORT=${MASTER_PORT:-29500}
+export RANK=${RANK:-0}
+export WORLD_SIZE=${WORLD_SIZE:-1}
 
-# Match this to the target model used by the draft checkpoint.
-target_name_or_path=Qwen/Qwen3-4B
+# Match this to the target model used by the draft checkpoint. Override via env,
+# e.g. target_name_or_path=deepreinforce-ai/Ornith-1.0-9B bash scripts/eval/eval.sh
+target_name_or_path=${target_name_or_path:-Qwen/Qwen3-4B}
 
 # Training writes checkpoints under ~/checkpoints/<project_name>/<exp_name>/step_*.
 # Use step_latest for the most recent checkpoint, or replace it with step_<N>.
-draft_name_or_path=${HOME}/checkpoints/deepspec/dspark_block7_qwen3_4b/step_latest
+draft_name_or_path=${draft_name_or_path:-${HOME}/checkpoints/deepspec/dspark_block7_qwen3_4b/step_latest}
 python eval.py \
     --target_name_or_path ${target_name_or_path} \
     --draft_name_or_path ${draft_name_or_path}

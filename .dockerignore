@@ -1,0 +1,26 @@
+# Only requirements.txt is COPYied into the image; everything else is bind-mounted
+# at runtime. Keep the build context tiny so builds are fast.
+.git
+.gitattributes
+.venv/
+.claude/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+cache/
+train_datasets/
+eval_datasets/
+tensorboard/
+logs/
+checkpoints/
+*.png
+*.pdf
+*.egg-info/
+build/
+dist/
+.env
+.env.example
+.DS_Store
+*.jsonl

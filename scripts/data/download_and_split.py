@@ -152,25 +152,42 @@ def user_turns(row: dict) -> list[str]:
 def write_train_jsonl(dataset, output_path: Path) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
+    skipped = 0
     with output_path.open("w", encoding="utf-8") as handle:
         for row_number, row in enumerate(dataset, start=1):
             converted = normalize_conversations(row)
-            validate_conversations(converted, row_number)
+            # open-perfectblend has a small fraction of junk rows (empty or
+            # non-string content, no user turn). Skip them instead of aborting
+            # the whole export over one bad row.
+            try:
+                validate_conversations(converted, row_number)
+            except ValueError:
+                skipped += 1
+                continue
             handle.write(json.dumps(converted, ensure_ascii=False) + "\n")
             count += 1
+    if skipped:
+        print(f"skipped {skipped} invalid train rows")
     return count
 
 
 def write_eval_jsonl(dataset, output_path: Path) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
+    skipped = 0
     with output_path.open("w", encoding="utf-8") as handle:
         for row_number, row in enumerate(dataset, start=1):
             converted = normalize_conversations(row)
-            validate_conversations(converted, row_number)
+            try:
+                validate_conversations(converted, row_number)
+            except ValueError:
+                skipped += 1
+                continue
             turns = user_turns(converted)
             handle.write(json.dumps({"turns": turns}, ensure_ascii=False) + "\n")
             count += 1
+    if skipped:
+        print(f"skipped {skipped} invalid eval rows")
     return count
 
 

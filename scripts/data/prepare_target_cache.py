@@ -60,12 +60,25 @@ def _get_target_backbone(target_model):
         if hasattr(target_model, "model") and hasattr(target_model.model, "language_model"):
             return target_model.model.language_model
         assert False, "Gemma4 target model must expose a text language_model."
+    if model_type == "qwen3_5":
+        # Qwen3.5 (e.g. Ornith-1.0-9B) is multimodal; the text decoder with the
+        # hookable .layers lives under language_model, like Gemma4. Confirm the
+        # exact path with scripts/ornith/check_load.py.
+        if hasattr(target_model, "language_model"):
+            return target_model.language_model
+        if hasattr(target_model, "model") and hasattr(target_model.model, "language_model"):
+            return target_model.model.language_model
+        assert False, "Qwen3.5 target model must expose a text language_model."
     return getattr(target_model, "model", target_model)
 
 
 def _get_target_hidden_size(target_model) -> int:
     model_type = str(target_model.config.model_type)
     if model_type in ("gemma4", "gemma4_unified"):
+        return int(target_model.config.text_config.hidden_size)
+    if model_type == "qwen3_5":
+        # Qwen3.5 is a multimodal composite; the text hidden size is nested under
+        # text_config (top-level fields are absent). See scripts/ornith/check_load.py.
         return int(target_model.config.text_config.hidden_size)
     return int(target_model.config.hidden_size)
 

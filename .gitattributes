@@ -1,0 +1,5 @@
+# Shell scripts and the Dockerfile are read/executed inside Linux containers.
+# Force LF so a Windows CRLF checkout can't break the bind-mounted entrypoint
+# (a CRLF `.sh` dies with `bash\r: No such file or directory`).
+*.sh text eol=lf
+Dockerfile text eol=lf

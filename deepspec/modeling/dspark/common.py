@@ -106,6 +106,52 @@ def create_dspark_attention_mask(
     )
 
 
+def create_dspark_attention_bias(
+    *,
+    anchor_positions: torch.Tensor,
+    block_keep_mask: torch.Tensor,
+    seq_len: int,
+    block_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+):
+    """Dense additive attention bias, equivalent to create_dspark_attention_mask.
+
+    For attention backends without flex_attention (sdpa/eager). flex_attention's
+    triton kernel exceeds shared memory on some GPUs at head_dim=256 (e.g. Ornith
+    on consumer Blackwell), so those backends need a materialized mask instead of
+    a BlockMask. Returns [B, 1, Q, KV] with 0.0 where attending is allowed and a
+    large negative value elsewhere. Fully-masked rows (invalid padding blocks) use
+    a large-negative-but-finite fill so softmax yields a uniform (non-NaN) row;
+    those blocks are discarded downstream via block_keep_mask.
+    """
+    bsz, num_blocks = anchor_positions.shape
+    q_len = num_blocks * block_size
+    kv_len = seq_len + num_blocks * block_size
+
+    q_idx = torch.arange(q_len, device=device)
+    kv_idx = torch.arange(kv_len, device=device)
+    q_block_id = q_idx // block_size
+
+    anchor_pos = anchor_positions[:, q_block_id]  # [bsz, q_len]
+    is_context = kv_idx < seq_len  # [kv_len]
+    is_draft = kv_idx >= seq_len  # [kv_len]
+    kv_block_id = (kv_idx - seq_len) // block_size  # [kv_len]
+
+    mask_context = is_context.view(1, 1, kv_len) & (
+        kv_idx.view(1, 1, kv_len) < anchor_pos.view(bsz, q_len, 1)
+    )
+    mask_draft = is_draft.view(1, 1, kv_len) & (
+        q_block_id.view(1, q_len, 1) == kv_block_id.view(1, 1, kv_len)
+    )
+    is_valid_block = block_keep_mask[:, q_block_id]  # [bsz, q_len] bool
+    allowed = (mask_context | mask_draft) & is_valid_block.view(bsz, q_len, 1)
+
+    bias = torch.zeros(bsz, 1, q_len, kv_len, device=device, dtype=dtype)
+    bias.masked_fill_(~allowed.view(bsz, 1, q_len, kv_len), torch.finfo(dtype).min)
+    return bias
+
+
 def build_anchor_candidate_mask(
     *,
     seq_len: int,

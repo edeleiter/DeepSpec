@@ -22,6 +22,7 @@ from deepspec.eval.dspark.draft_ops import (
 from deepspec.modeling.dspark.common import extract_context_feature
 from deepspec.modeling.dspark.gemma4 import Gemma4DSparkModel
 from deepspec.modeling.dspark.qwen3 import Qwen3DSparkModel
+from deepspec.modeling.dspark.qwen3_5 import Qwen35DSparkModel
 from deepspec.utils import jsonable
 
 
@@ -223,3 +224,7 @@ class Qwen3DSparkEvaluator(BaseEvaluator):
 
 class Gemma4DSparkEvaluator(Qwen3DSparkEvaluator):
     draft_model_cls = Gemma4DSparkModel
+
+
+class Qwen35DSparkEvaluator(Qwen3DSparkEvaluator):
+    draft_model_cls = Qwen35DSparkModel

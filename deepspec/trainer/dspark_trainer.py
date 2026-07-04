@@ -8,6 +8,10 @@ from deepspec.modeling.dspark.qwen3 import Qwen3DSparkModel
 from deepspec.modeling.dspark.qwen3.config import (
     build_draft_config as build_qwen3_draft_config,
 )
+from deepspec.modeling.dspark.qwen3_5 import Qwen35DSparkModel
+from deepspec.modeling.dspark.qwen3_5.config import (
+    build_draft_config as build_qwen35_draft_config,
+)
 from deepspec.trainer.base_trainer import BaseTrainer
 
 
@@ -46,3 +50,12 @@ class Gemma4DSparkTrainer(Qwen3DSparkTrainer):
             model_args=model_args,
         )
         return Gemma4DSparkModel(draft_config)
+
+
+class Qwen35DSparkTrainer(Qwen3DSparkTrainer):
+    def _build_draft_model(self, *, target_config, model_args):
+        draft_config = build_qwen35_draft_config(
+            target_config=target_config,
+            model_args=model_args,
+        )
+        return Qwen35DSparkModel(draft_config)
