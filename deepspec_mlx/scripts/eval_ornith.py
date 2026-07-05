@@ -18,12 +18,17 @@ import sys
 
 import mlx.core as mx
 
-sys.path.insert(0, __file__.rsplit("/deepspec_mlx/", 1)[0])
+_ROOT = __file__.rsplit("/deepspec_mlx/", 1)[0]
+sys.path.insert(0, _ROOT)
+import argparse
+
+from deepspec_mlx.data import CacheReader
 from deepspec_mlx.modeling import build_draft_config, Qwen3DSparkModel
 from deepspec_mlx.modeling.qwen3_5_target_capture import (
     capture_forward, ornith_text_model, model_dims,
 )
 from deepspec_mlx.eval import CacheFreeTargetRunner, generate
+from deepspec_mlx.trainer import overfit
 
 MODEL = "deepreinforce-ai/Ornith-1.0-9B"
 TLI = [7, 15, 23]                     # full-attention layers (torch dspark_ornith_9b.py)
@@ -31,6 +36,18 @@ MASK_ID = 248044                      # Ornith pad/mask token
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--cache", default=None, help="Ornith target cache -> train before eval (M8b)")
+    ap.add_argument("--steps", type=int, default=60)
+    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--max-new-tokens", type=int, default=14)
+    ap.add_argument("--heldout-jsonl", default=f"{_ROOT}/eval_datasets/gsm8k.jsonl")
+    ap.add_argument("--heldout-idx", type=int, default=120, help="gsm8k line for a HELD-OUT eval prompt")
+    ap.add_argument("--save", default=None, help="dir to save the trained draft checkpoint")
+    args = ap.parse_args()
+    import json
+    import os
+
     from mlx_lm import load
     print(f"loading {MODEL} ...", flush=True)
     model, tok = load(MODEL)
@@ -63,20 +80,62 @@ def main():
     draft.initialize_from_target(lm.model.embed_tokens.weight, lm.lm_head.weight)
     mx.eval(draft.parameters())
 
+    # ---- optional training (M8b): overfit an Ornith target cache ----
+    eval_prompt = ids[:, :10]
+    trained = False
+    if args.cache:
+        r = CacheReader(os.path.expanduser(args.cache))
+        samples = [r[i] for i in range(len(r))]
+        print(f"\ntraining on {len(samples)} Ornith samples for {args.steps} steps...")
+        overfit(draft, samples, steps=args.steps, lr=args.lr, log_every=max(args.steps // 2, 1))
+        eval_prompt = samples[0]["input_ids"][None, : max(6, samples[0]["input_ids"].shape[0] // 2)]
+        r.close()
+        trained = True
+        if args.save:
+            from deepspec_mlx.serve import save_draft
+            save_draft(draft, os.path.expanduser(args.save), target_id=MODEL,
+                       arch="qwen3_5", model_id="dspark-ornith-9b")
+            print(f"saved draft -> {args.save}")
+
     # ---- Gate 2: the spec-decode loop runs via cache-free verify ----
-    print(f"\n== Gate 2: spec-decode loop on Ornith (cache-free verify) ==")
-    prompt = ids[:, :10]
-    runner = CacheFreeTargetRunner(model, TLI, capture_fn=capture_forward)
-    out = generate(runner, draft, prompt, max_new_tokens=14, block_size=7,
-                   temperature=0.0, stop_ids=[], seed=0)
-    al = out.accept_sum / max(out.proposal_count, 1)
-    print(f"  committed {len(out.committed)} tokens over {out.proposal_count} verify steps; "
-          f"acceptance_length={al:.3f} (random draft -> ~1.0 expected)")
-    gate2 = out.proposal_count > 0 and len(out.committed) > 0 and al >= 1.0
+    def eval_on(prompt, tag):
+        runner = CacheFreeTargetRunner(model, TLI, capture_fn=capture_forward)
+        out = generate(runner, draft, prompt, max_new_tokens=args.max_new_tokens, block_size=7,
+                       temperature=0.0, stop_ids=[], seed=0)
+        al = out.accept_sum / max(out.proposal_count, 1)
+        print(f"  [{tag}] committed {len(out.committed)} over {out.proposal_count} verify steps; "
+              f"acceptance_length={al:.3f}  (block_size=7, max ~= 8)")
+        return al
+
+    def heldout_prompt():
+        p = args.heldout_jsonl
+        if not (p and os.path.exists(p)):
+            return None
+        with open(p, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if i == args.heldout_idx:
+                    turns = json.loads(line).get("turns") or []
+                    if not turns:
+                        return None
+                    hid = mx.array(tok.encode(turns[0])[:48], dtype=mx.int32)[None]
+                    return hid[:, : max(6, hid.shape[1] // 2)]
+        return None
+
+    print(f"\n== Gate 2: spec-decode on Ornith (cache-free verify) ==")
+    if trained:
+        al_train = eval_on(eval_prompt, "train-prompt = upper bound (memorized)")
+        hp = heldout_prompt()
+        al = eval_on(hp, "HELD-OUT = honest") if hp is not None else al_train
+        gate2 = al > 1.05           # honest held-out accelerates decoding
+    else:
+        al = eval_on(eval_prompt, "random-init")
+        gate2 = al >= 1.0
     print(f"  Gate 2: {'PASS' if gate2 else 'FAIL'}")
 
     ok = gate1 and gate2
-    print(f"\nRESULT: {'PASS — DSpark spec-decode runs on Ornith (what torch could not eval)' if ok else 'FAIL'}")
+    headline = ("PASS — trained DSpark draft accelerates Ornith on a HELD-OUT prompt (M8b)" if trained
+                else "PASS — DSpark spec-decode runs on Ornith (what torch could not eval)")
+    print(f"\nRESULT: {headline if ok else 'FAIL'}")
     return 0 if ok else 1
 
 

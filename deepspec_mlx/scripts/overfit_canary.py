@@ -29,6 +29,7 @@ def main():
     ap.add_argument("--steps", type=int, default=60)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--dtype", choices=["fp32", "bf16"], default="fp32")
+    ap.add_argument("--save", default=None, help="dir to save the trained draft checkpoint")
     args = ap.parse_args()
 
     from mlx_lm import load
@@ -52,6 +53,12 @@ def main():
 
     print(f"overfitting {len(samples)} samples for {args.steps} steps (lr={args.lr})...")
     history = overfit(draft, samples, steps=args.steps, lr=args.lr, log_every=10)
+
+    if args.save:
+        from deepspec_mlx.serve import save_draft
+        meta = save_draft(draft, os.path.expanduser(args.save), target_id=args.model,
+                          arch="qwen3", model_id=f"dspark-{args.model.split('/')[-1].lower()}")
+        print(f"saved draft -> {args.save} (model_id={meta['model_id']})")
 
     ce0, ar0 = history[0][1], history[0][2]
     ceN, arN = history[-1][1], history[-1][2]

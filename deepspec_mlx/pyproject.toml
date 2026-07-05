@@ -1,0 +1,23 @@
+[project]
+name = "deepspec-mlx"
+version = "0.1.0"
+description = "Native-MLX port of DeepSpec DSpark speculative decoding (Apple Silicon)."
+requires-python = ">=3.12"
+dependencies = [
+    "mlx",
+    "mlx-lm",
+    # transformers 5.13 breaks mlx-lm 0.31.3's AutoTokenizer.register("NewlineTokenizer",
+    # ...) call; pin to the 5.10.x line (also what the torch reference repo uses).
+    "transformers==5.10.2",
+    "numpy",
+    "safetensors",
+    "huggingface-hub",
+    # OpenAI-compatible server (deepspec_mlx/serve).
+    "fastapi",
+    "uvicorn",
+]
+
+[tool.uv]
+# Scripts import `deepspec_mlx` via sys.path (repo root on the path), so uv should
+# NOT try to build/install this directory as a package — just manage the environment.
+package = false

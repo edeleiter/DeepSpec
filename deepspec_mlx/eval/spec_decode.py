@@ -167,8 +167,10 @@ def confident_prefix_length(draft, block_hidden, first_token, sampled, threshold
 
 
 # ---------- the spec-decode loop ----------
-def generate(target: TargetRunner, draft, input_ids, *, max_new_tokens, block_size,
-             temperature=0.0, stop_ids=None, confidence_threshold=0.0, seed=0):
+def generate(target, draft, input_ids, *, max_new_tokens, block_size,
+             temperature=0.0, stop_ids=None, confidence_threshold=0.0, seed=0, on_commit=None):
+    # on_commit(list[int]) fires with each newly committed token id batch (first token,
+    # then per verify step) -> enables token streaming. No behavior change when None.
     stop_ids = set(int(x) for x in (stop_ids or []))
     key = mx.random.key(seed)
     num_input = input_ids.shape[1]
@@ -180,6 +182,8 @@ def generate(target: TargetRunner, draft, input_ids, *, max_new_tokens, block_si
     mx.eval(first)
 
     committed = [int(first[0])]
+    if on_commit is not None:
+        on_commit([committed[0]])
     full_target_hidden = target_hidden                         # context 0..num_input-1
     start = num_input
     acceptance_lengths, proposal_lengths = [], []
@@ -236,7 +240,8 @@ def generate(target: TargetRunner, draft, input_ids, *, max_new_tokens, block_si
             pos_total[j] += 1
             pos_accept[j] += accept_prefix[j]
 
-        committed.extend(int(x) for x in sampled[0, :accepted])
+        accepted_ids = [int(x) for x in sampled[0, :accepted]]
+        committed.extend(accepted_ids)
         effective = accepted if terminated else k
         proposal_lengths.append(effective)                     # matches base_evaluator.py:407
 
@@ -244,6 +249,8 @@ def generate(target: TargetRunner, draft, input_ids, *, max_new_tokens, block_si
             acceptance_lengths.append(accepted)
             start += accepted
             target.trim((k + 1) - accepted)
+            if on_commit is not None and accepted_ids:
+                on_commit(accepted_ids)
             break
 
         # bonus/correction token
@@ -259,6 +266,8 @@ def generate(target: TargetRunner, draft, input_ids, *, max_new_tokens, block_si
         target.trim(k - accepted)                              # keep start = prev+accepted+1
         full_target_hidden = mx.concatenate([full_target_hidden, vhidden[:, :accepted + 1, :]], axis=1)
         mx.eval(full_target_hidden)
+        if on_commit is not None:
+            on_commit(accepted_ids + [next_token])
         if next_token in stop_ids:
             break
 

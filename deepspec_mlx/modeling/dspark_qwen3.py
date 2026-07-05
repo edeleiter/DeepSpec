@@ -3,7 +3,8 @@
 The core novelty is the custom NON-causal cross/block attention: queries come from
 the noise/draft positions, keys/values are cat([target_context, noise]), masked by a
 dense additive bias, with RoPE applied asymmetrically (q uses the last q_len position
-slots, k uses all). Training forward only (eval sampling lands in M6).
+slots, k uses all). Contains both the training forward (__call__) and the cache-free
+eval block forward (backbone_block).
 """
 
 from __future__ import annotations

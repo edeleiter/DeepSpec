@@ -7,6 +7,10 @@ model — training, the Muon optimizer, and the acceptance-length eval — in Ap
 The original PyTorch package (`../deepspec/`) is untouched and serves as the reference
 "oracle" this port is validated against. This package is `deepspec_mlx/`.
 
+> **Resuming / new here?** Read **`STATUS.md`** (project state + milestone ledger + what's next)
+> and **`ARCHITECTURE.md`** (the design decisions) first. This README is the how-to-run.
+> It also runs on a hybrid target — see **§5c (Ornith)** for the marquee result.
+
 > **Canary target:** `Qwen/Qwen3-0.6B`. Everything below runs in ~1–2 minutes total on an
 > M-series Mac. Scaling to 1.7B/4B/8B/14B is a config swap (see "Scaling up").
 
@@ -24,23 +28,35 @@ Run everything from the repo root: `/Users/edele/Documents/ws/DeepSpec`.
 
 ---
 
-## 1. One-time setup
+## 1. One-time setup (uv)
+
+This is a `uv` project (`deepspec_mlx/pyproject.toml` + `uv.lock`). One command creates the
+environment (uv fetches Python 3.12 and all deps from the lockfile):
 
 ```bash
 # from the repo root
-uv venv --python 3.12 deepspec_mlx/.venv          # uv fetches Python 3.12 for you
-source deepspec_mlx/.venv/bin/activate            # activate (all commands below assume this)
-uv pip install -r deepspec_mlx/requirements.txt   # mlx, mlx-lm, numpy, safetensors, hf-hub
+uv sync --project deepspec_mlx
 ```
 
+**Running commands.** Every `python …` command in this README runs under the uv env. Two ways:
+
+```bash
+# (a) activate once, then use `python` directly (what the commands below assume):
+source deepspec_mlx/.venv/bin/activate
+
+# (b) or, without activating, prefix any command with:
+uv run --project deepspec_mlx python deepspec_mlx/scripts/eval_mlx.py ...
+```
+
+Scripts are working-directory-independent (imports + data paths resolve to the repo root), so
+you can run from anywhere. To add/upgrade a dependency: edit `pyproject.toml` then `uv sync`.
+
 Notes:
-- `requirements.txt` **pins `transformers==5.10.2`** on purpose — 5.13 breaks mlx-lm's
-  tokenizer registration. Don't bump it without testing.
-- Qwen3-0.6B is a **public** model, so no token is required. To avoid HF rate-limit
-  warnings / get faster downloads, optionally `export HF_TOKEN=hf_...` (there's one in
-  the repo's `.env`, but it is **not** auto-loaded — export it yourself if you want it).
-- If you'd rather not activate the venv, prefix each command with
-  `deepspec_mlx/.venv/bin/python` instead of `python`.
+- `pyproject.toml` **pins `transformers==5.10.2`** on purpose — 5.13 breaks mlx-lm's tokenizer
+  registration. Don't bump it without testing.
+- Qwen3-0.6B is a **public** model, so no token is required. To avoid HF rate-limit warnings /
+  get faster downloads, optionally `export HF_TOKEN=hf_...` (there's one in the repo's `.env`,
+  but it is **not** auto-loaded — export it yourself if you want it).
 
 ---
 
@@ -118,7 +134,7 @@ All torch-free; validate the port against numpy references and self-consistency.
 
 ```bash
 for t in test_muon_parity test_cache_reader_parity test_dspark_forward \
-         test_precision test_spec_decode; do
+         test_precision test_spec_decode test_cachefree_target; do
   echo "== $t =="; python deepspec_mlx/tests/$t.py; done
 ```
 
@@ -129,6 +145,7 @@ for t in test_muon_parity test_cache_reader_parity test_dspark_forward \
 | `test_dspark_forward` | draft forward shapes, attention-bias masking, loss == numpy to 1e-9, gradients flow |
 | `test_precision` | the real bf16-heads path in both compute modes + the dtype guardrail |
 | `test_spec_decode` | spec-decode stop-token termination + metric invariants |
+| `test_cachefree_target` | cache-free verify == the trim oracle on the canary (underpins the Ornith path) |
 
 ---
 
@@ -158,7 +175,61 @@ python deepspec_mlx/spikes/m4_draft_cache_trim.py
 
 ---
 
-## 6. Scaling up (M7)
+## 5b. Serve a trained draft (OpenAI-compatible)
+
+Save a trained draft, then serve the DSpark-accelerated target over `/v1/chat/completions`.
+Generic: the checkpoint self-describes its target + arch, so the same server handles a plain
+Qwen3 draft (cached/trim runner) or an Ornith/qwen3_5 draft (cache-free runner) with no edits.
+
+```bash
+# 1) train + save a draft checkpoint (weights.safetensors + draft.json)
+python deepspec_mlx/scripts/overfit_canary.py --steps 40 --save ~/dspark_mlx/checkpoints/qwen3_0_6b
+#    (Ornith: eval_ornith.py --cache ... --save ~/dspark_mlx/checkpoints/ornith_9b)
+
+# 2) launch the server
+python deepspec_mlx/serve/server.py --draft ~/dspark_mlx/checkpoints/qwen3_0_6b --port 8000
+
+# 3) drive it from any OpenAI-compatible client
+curl -s localhost:8000/v1/models
+curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Name three primary colors."}],"max_tokens":64}'
+# streaming:
+curl -sN localhost:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Count to five."}],"stream":true}'
+```
+
+Notes: batch-1, single in-flight request (a lock). Spec-decode is **lossless** — the draft only
+changes speed, never output. This is a *server*: point an OpenAI-compatible **client** at it
+(Open WebUI, Chatbox, curl, coding agents). It is **not** LM Studio-loadable — the DSpark draft
+is a target-coupled arch, not a standalone GGUF/MLX model.
+
+## 5c. Ornith (Qwen3.5, hybrid) — the marquee result
+
+Ornith-1.0-9B (`model_type: qwen3_5`) is a **hybrid** model: ~3/4 of its layers are
+linear-attention GatedDeltaNet whose recurrent state **cannot be rewound**. The PyTorch
+reference **cannot run spec-decode eval on it** (its `DynamicCache.crop` can't trim linear
+state — the torch repo shipped a train-only POC). Our **cache-free target verify**
+(§ARCHITECTURE, validated on the canary) makes it work. `scripts/eval_ornith.py` is the driver.
+
+```bash
+# generate an Ornith target cache (hybrid capture), train + eval on a HELD-OUT prompt:
+python deepspec_mlx/scripts/prepare_target_cache_mlx.py --arch qwen3_5 \
+    --model deepreinforce-ai/Ornith-1.0-9B --out ~/dspark_mlx/cache/ornith_9b \
+    --num 24 --max-length 96 --layers 7,15,23
+python deepspec_mlx/scripts/eval_ornith.py --cache ~/dspark_mlx/cache/ornith_9b --steps 120
+```
+
+Two gates it checks: (1) the hybrid capture reproduces the stock logits **bit-exact**; (2) the
+spec-decode loop runs via cache-free verify. With training it reports the honest **held-out
+`acceptance_length` (~1.23 on a tiny 24-sample run)** — a real generalization number, modest only
+because the training set is tiny. (A same-prompt run shows 6–8; that's a *memorized upper bound*,
+not generalization.) First run downloads ~15 GB. See `STATUS.md` for the faithful-number next step.
+
+## 6. Scaling up plain Qwen3 — M7 (DESIGNED, **not yet run**)
+
+> ⚠️ This path is **untested aspiration** — only Ornith 9B (§5c) has actually been scaled to.
+> The commands below should work (plain Qwen3 is full-attention → the fast trimmable cache), but
+> they have not been executed. Treat as a starting point, not a validated recipe.
 
 Swap the target — the draft dims are read from the target's config automatically:
 
@@ -184,17 +255,23 @@ Watch for:
 deepspec_mlx/
   optim/          Muon (Newton-Schulz) + the MuonAdam split (MultiOptimizer) + cosine schedule
   data/           v2 target-cache format, reader, writer
-  modeling/       qwen3_target_capture (instrumented target), config, dspark_common
-                  (attention bias / anchors / gathers), markov_head, dspark_qwen3 (draft), loss
+  modeling/       qwen3_target_capture + qwen3_5_target_capture (instrumented targets), config,
+                  dspark_common (attention bias / anchors / gathers), markov_head, dspark_qwen3
+                  (draft, incl. eval backbone_block), loss
   trainer/        train_loop: value_and_grad + grad-accum + fp32 master (scheme C)
-  eval/           spec_decode: the acceptance-length loop (+ confidence early-exit)
-  scripts/        prepare_target_cache_mlx, overfit_canary, eval_mlx
-  tests/          torch-free parity + self-consistency tests
+  eval/           spec_decode: the acceptance loop + TargetRunner (trim) + CacheFreeTargetRunner
+  serve/          checkpoint (save/load) + server (FastAPI OpenAI-compatible, arch-aware)
+  scripts/        prepare_target_cache_mlx, overfit_canary, eval_mlx, eval_ornith
+  tests/          torch-free parity + self-consistency tests (6)
   spikes/         M1 de-risk probes (historical)
+STATUS.md         project state + milestone ledger + how to resume  <- start here
+ARCHITECTURE.md   the four load-bearing design decisions
 ```
 
 ## 8. Known deferred items
 
+See `STATUS.md` for the full list + "what's next". In brief:
+- **M7 plain-Qwen3 4B/8B/14B scale-up** — designed (§6) but **never run**; only Ornith 9B was scaled.
 - **bf16 bit-parity vs the torch oracle** — needs fixtures generated from `../deepspec/`
   on a torch machine (out-of-band by design; unlocked by the bf16 mode).
 - **Gated/RNN markov heads** — only `vanilla` is ported (the canary config's choice).

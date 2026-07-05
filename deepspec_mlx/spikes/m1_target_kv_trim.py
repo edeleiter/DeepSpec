@@ -133,5 +133,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except ImportError as e:
-        print(f"[import error] {e}\n\nInstall the MLX runtime first (see deepspec_mlx/requirements.txt).", file=sys.stderr)
+        print(f"[import error] {e}\n\nInstall the MLX runtime first: uv sync --project deepspec_mlx", file=sys.stderr)
         sys.exit(2)

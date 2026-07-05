@@ -22,9 +22,18 @@ import sys
 
 import mlx.core as mx
 
-sys.path.insert(0, __file__.rsplit("/deepspec_mlx/", 1)[0])
+_ROOT = __file__.rsplit("/deepspec_mlx/", 1)[0]
+sys.path.insert(0, _ROOT)
 from deepspec_mlx.data import write_target_cache
-from deepspec_mlx.modeling.qwen3_target_capture import capture_hidden_states, model_dims
+
+
+def _capture_backend(arch):
+    """Pick the target-capture module by architecture (same interface for both)."""
+    if arch == "qwen3_5":                       # Ornith / hybrid Qwen3.5
+        from deepspec_mlx.modeling.qwen3_5_target_capture import capture_hidden_states, model_dims
+    else:                                       # plain Qwen3 (full attention)
+        from deepspec_mlx.modeling.qwen3_target_capture import capture_hidden_states, model_dims
+    return capture_hidden_states, model_dims
 
 # Fallback canary prompts (used if --jsonl is absent). Short + varied.
 DEFAULT_PROMPTS = [
@@ -63,14 +72,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, help="output cache dir (must be new/empty)")
     ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
-    ap.add_argument("--jsonl", default="eval_datasets/gsm8k.jsonl")
+    ap.add_argument("--jsonl", default=f"{_ROOT}/eval_datasets/gsm8k.jsonl")
     ap.add_argument("--num", type=int, default=8)
     ap.add_argument("--max-length", type=int, default=128)
     ap.add_argument("--layers", default="1,6,13,20,26", help="target_layer_ids (excl. final)")
+    ap.add_argument("--arch", choices=["qwen3", "qwen3_5"], default="qwen3",
+                    help="qwen3_5 for Ornith / hybrid targets")
     args = ap.parse_args()
 
     from mlx_lm import load
 
+    capture_hidden_states, model_dims = _capture_backend(args.arch)
     model, tok = load(args.model)
     dims = model_dims(model)
     H = dims["hidden_size"]
