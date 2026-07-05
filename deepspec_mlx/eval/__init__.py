@@ -1,5 +1,5 @@
 """MLX speculative-decoding acceptance eval (M6)."""
 
-from .spec_decode import TargetRunner, generate
+from .spec_decode import TargetRunner, CacheFreeTargetRunner, generate
 
-__all__ = ["TargetRunner", "generate"]
+__all__ = ["TargetRunner", "CacheFreeTargetRunner", "generate"]

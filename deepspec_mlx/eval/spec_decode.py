@@ -44,7 +44,36 @@ def sample_residual(target_p, draft_p, key):
     return sample_from_probs(residual, key)
 
 
-# ---------- target with KV cache + per-layer hidden capture ----------
+# ---------- shared per-layer capture (identical math for both runners) ----------
+def _capture_target_forward(model, tli, input_ids, cache):
+    """Run the target over input_ids, capturing raw per-layer hidden at `tli`.
+
+    cache is either a per-layer cache list (incremental decode) or None (cache-free
+    full-sequence recompute). This is the ONE forward body both runners share, so the
+    only difference between them is cache vs cache=None -> any runner-vs-runner delta
+    is a real cache/kernel effect, not divergent code.
+    Returns (logits [1,S,V], target_hidden [1,S,L*H] concat in tli order, -1=embed).
+    """
+    m = model.model
+    a = model.args
+    h = m.embed_tokens(input_ids)
+    captured = {}
+    if -1 in tli:                                  # -1 = embedding output
+        captured[-1] = h
+    mask = create_attention_mask(h, cache[0] if cache is not None else None)
+    want = set(tli)
+    caches = cache if cache is not None else [None] * len(m.layers)
+    for i, (layer, c) in enumerate(zip(m.layers, caches)):
+        h = layer(h, mask, c)
+        if i in want:
+            captured[i] = h
+    last = m.norm(h)
+    logits = m.embed_tokens.as_linear(last) if a.tie_word_embeddings else model.lm_head(last)
+    target_hidden = mx.concatenate([captured[i] for i in tli], axis=-1)
+    return logits, target_hidden
+
+
+# ---------- target with a trimmable KV cache (full-attention targets) ----------
 class TargetRunner:
     def __init__(self, model, target_layer_ids):
         self.model = model
@@ -52,23 +81,7 @@ class TargetRunner:
         self.cache = make_prompt_cache(model)
 
     def forward(self, input_ids):
-        """Cached forward -> (logits [1,S,V], target_hidden [1,S,L*H] concat raw layers)."""
-        m = self.model.model
-        a = self.model.args
-        h = m.embed_tokens(input_ids)
-        captured = {}
-        if -1 in self.tli:                # -1 = embedding output
-            captured[-1] = h
-        mask = create_attention_mask(h, self.cache[0])
-        want = set(self.tli)
-        for i, (layer, c) in enumerate(zip(m.layers, self.cache)):
-            h = layer(h, mask, c)
-            if i in want:
-                captured[i] = h
-        last = m.norm(h)
-        logits = m.embed_tokens.as_linear(last) if a.tie_word_embeddings else self.model.lm_head(last)
-        target_hidden = mx.concatenate([captured[i] for i in self.tli], axis=-1)  # tli order
-        return logits, target_hidden
+        return _capture_target_forward(self.model, self.tli, input_ids, self.cache)
 
     @property
     def offset(self):
@@ -77,6 +90,42 @@ class TargetRunner:
     def trim(self, n):
         if n > 0:
             trim_prompt_cache(self.cache, int(n))
+
+
+# ---------- cache-free target (any attention type, incl. linear/hybrid: Ornith) ----------
+class CacheFreeTargetRunner:
+    """Same forward/trim/offset contract as TargetRunner, but keeps NO KV cache: each
+    forward recomputes the target over the full committed prefix + new tokens (cache=None),
+    so nothing is ever rewound. Correct for linear-attention/hybrid targets whose recurrent
+    state can't be trimmed. O(n^2); tracks the committed prefix in `self.prefix`.
+    """
+    def __init__(self, model, target_layer_ids, capture_fn=None):
+        # capture_fn(model, tli, seq) -> (logits, hidden) lets a non-Qwen3 target
+        # (e.g. Ornith's hybrid qwen3_5 backbone) plug in its own cache-free forward.
+        # None -> the standard Qwen3 full-attention capture.
+        self.model = model
+        self.tli = [int(x) for x in target_layer_ids]
+        self.capture_fn = capture_fn
+        self.prefix = mx.zeros((1, 0), dtype=mx.int32)
+
+    def forward(self, new_ids):
+        new_ids = new_ids.astype(mx.int32)
+        seq = new_ids if self.prefix.shape[1] == 0 else mx.concatenate([self.prefix, new_ids], axis=1)
+        if self.capture_fn is not None:
+            logits, hidden = self.capture_fn(self.model, self.tli, seq)
+        else:
+            logits, hidden = _capture_target_forward(self.model, self.tli, seq, None)
+        self.prefix = seq                                  # append (mirrors cache append)
+        s = new_ids.shape[1]
+        return logits[:, -s:, :], hidden[:, -s:, :]        # only the new positions
+
+    @property
+    def offset(self):
+        return self.prefix.shape[1]
+
+    def trim(self, n):
+        if n > 0:                                          # drop the speculative tail
+            self.prefix = self.prefix[:, : self.prefix.shape[1] - int(n)]
 
 
 # ---------- markov autoregressive block sampling ----------
